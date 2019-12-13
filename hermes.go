@@ -8,6 +8,9 @@ import (
 	"github.com/imdario/mergo"
 	"github.com/jaytaylor/html2text"
 	"github.com/russross/blackfriday/v2"
+	"github.com/tdewolff/minify/v2"
+	"github.com/tdewolff/minify/v2/html"
+	"github.com/vanng822/go-premailer/premailer"
 )
 
 // Hermes is an instance of the hermes email generator
@@ -30,6 +33,9 @@ type TextDirection string
 var templateFuncs = template.FuncMap{
 	"url": func(s string) template.URL {
 		return template.URL(s)
+	},
+	"html": func(s string) template.HTML {
+		return template.HTML(s)
 	},
 }
 
@@ -60,16 +66,18 @@ type Markdown template.HTML
 
 // Body is the body of the email, containing all interesting data
 type Body struct {
-	Name         string   // The name of the contacted person
-	Intros       []string // Intro sentences, first displayed in the email
-	Dictionary   []Entry  // A list of key+value (useful for displaying parameters/settings/personal info)
-	Table        Table    // Table is an table where you can put data (pricing grid, a bill, and so on)
-	Actions      []Action // Actions are a list of actions that the user will be able to execute via a button click
-	Outros       []string // Outro sentences, last displayed in the email
-	Greeting     string   // Greeting for the contacted person (default to 'Hi')
-	Signature    string   // Signature for the contacted person (default to 'Yours truly')
-	Title        string   // Title replaces the greeting+name when set
-	FreeMarkdown Markdown // Free markdown content that replaces all content other than header and footer
+	Name           string   // The name of the contacted person
+	Intros         []string // Intro sentences, first displayed in the email
+	IntrosMarkdown Markdown // Intro in markdown, will override Intros
+	Dictionary     []Entry  // A list of key+value (useful for displaying parameters/settings/personal info)
+	Table          Table    // Table is an table where you can put data (pricing grid, a bill, and so on)
+	Actions        []Action // Actions are a list of actions that the user will be able to execute via a button click
+	Outros         []string // Outro sentences, last displayed in the email
+	OutrosMarkdown Markdown // Outro in markdown, will override Outros
+	Greeting       string   // Greeting for the contacted person (default to 'Hi')
+	Signature      string   // Signature for the contacted person (default to 'Yours truly')
+	Title          string   // Title replaces the greeting+name when set
+	FreeMarkdown   Markdown // Free markdown content that replaces all content other than header and footer
 }
 
 // ToHTML converts Markdown to HTML
@@ -158,6 +166,34 @@ func setDefaultHermesValues(h *Hermes) error {
 	return nil
 }
 
+// InlineCSS inlines CSS styles in matching HTML elements
+func inlineCSS(s string) string {
+	prem, err := premailer.NewPremailerFromString(s, premailer.NewOptions())
+	if err != nil {
+		panic(err)
+	}
+
+	html, err := prem.Transform()
+	if err != nil {
+		panic(err)
+	}
+
+	return html
+}
+
+// MinifyHTML strips unnecessary characters from HTML content
+func minifyHTML(s string) string {
+	m := minify.New()
+	m.AddFunc("text/html", html.Minify)
+
+	var err error
+	s, err = m.String("text/html", s)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
 // GenerateHTML generates the email body from data to an HTML Reader
 // This is for modern email clients
 func (h *Hermes) GenerateHTML(email Email) (string, error) {
@@ -165,7 +201,13 @@ func (h *Hermes) GenerateHTML(email Email) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return h.generateTemplate(email, h.Theme.HTMLTemplate())
+
+	result, err := h.generateTemplate(email, h.Theme.HTMLTemplate())
+	if err != nil {
+		return "", err
+	}
+
+	return minifyHTML(inlineCSS(result)), nil
 }
 
 // GeneratePlainText generates the email body from data
@@ -183,7 +225,6 @@ func (h *Hermes) GeneratePlainText(email Email) (string, error) {
 }
 
 func (h *Hermes) generateTemplate(email Email, tplt string) (string, error) {
-
 	err := setDefaultEmailValues(&email)
 	if err != nil {
 		return "", err
